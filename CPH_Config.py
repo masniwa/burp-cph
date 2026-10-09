@@ -472,6 +472,7 @@ class OptionsTab(SubTab, ChangeListener):
         quickstart_pane.setBorder(BorderFactory.createTitledBorder(self.QUICKSTART_PANE))
         quickstart_pane.getBorder().setTitleFont(Font(Font.SANS_SERIF, Font.ITALIC, 16))
         quickstart_text_lbl = JLabel(CPH_Help.quickstart)
+        quickstart_text_lbl.putClientProperty("html.disable", None)
         quickstart_text_lbl.setFont(Font(Font.MONOSPACED, Font.PLAIN, 14))
         quickstart_pane.add(quickstart_text_lbl)
 
@@ -1116,6 +1117,7 @@ class ConfigTab(SubTab):
         self.param_handl_txtfield_match_indices.setEnabled(False)
 
         self.param_handl_button_indices_help = self.HelpButton(CPH_Help.indices)
+        self.param_handl_button_indices_help.putClientProperty("html.disable", None)
         self.param_handl_button_indices_help.addActionListener(self)
 
         self.param_handl_subset_pane = JPanel(FlowLayout(FlowLayout.LEADING))
@@ -1162,12 +1164,16 @@ class ConfigTab(SubTab):
         self.param_handl_combo_extract.addActionListener(self)
 
         self.param_handl_button_named_groups_help = self.HelpButton(CPH_Help.named_groups)
+        self.param_handl_button_named_groups_help.putClientProperty("html.disable", None)
         self.param_handl_button_named_groups_help.addActionListener(self)
 
         # These ones don't need ActionListeners; see actionPerformed().
         self.param_handl_button_extract_single_help = self.HelpButton(CPH_Help.extract_single)
+        self.param_handl_button_extract_single_help.putClientProperty("html.disable", None)
         self.param_handl_button_extract_macro_help  = self.HelpButton(CPH_Help.extract_macro )
+        self.param_handl_button_extract_macro_help.putClientProperty("html.disable", None)
         self.param_handl_button_extract_cached_help = self.HelpButton(CPH_Help.extract_cached)
+        self.param_handl_button_extract_cached_help.putClientProperty("html.disable", None)
 
         self.param_handl_combo_cached = JComboBox()
         self.param_handl_combo_cached.addActionListener(self)

@@ -2061,6 +2061,13 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
         self.maintab.add_config_tab(self.messages_to_send)
 
     def extensionUnloaded(self):
+        # The API is separate from the demo httpd. Release its listening socket
+        # before destroying tabs so a reload cannot keep serving stale state.
+        if self.maintab.options_tab.api_httpd is not None:
+            self.maintab.options_tab.api_httpd.shutdown()
+            self.maintab.options_tab.api_httpd.server_close()
+            self.maintab.options_tab.api_httpd = None
+            self.maintab.options_tab.api_httpd_thread = None
         if self.maintab.options_tab.httpd is not None:
             self.maintab.options_tab.httpd.shutdown()
             self.maintab.options_tab.httpd.server_close()
@@ -2377,7 +2384,16 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
             selected_item = tab.param_handl_combo_extract.getSelectedItem()
 
             if selected_item == tab.PARAM_HANDL_COMBO_EXTRACT_CACHED:
-                find_exp, target_txt = ph_extract_cached_exp, tab.param_handl_cached_resp_viewer.getMessage()
+                # Read runtime state, not the asynchronously refreshed Swing viewer.
+                # The viewer can still contain an imported sample when the next
+                # macro request is already being processed on a worker thread.
+                source_name = tab.param_handl_combo_cached.getSelectedItem()
+                source_cache = MainTab.get_config_tab_cache(source_name)
+                if source_cache is None or not source_cache[1]:
+                    self.logger.warning('No live cached response for tab "{}"; skipping "{}".'.format(
+                        source_name, tab.namepane_txtfield.getText()))
+                    return msg_as_string
+                find_exp, target_txt = ph_extract_cached_exp, source_cache[1]
                 target_txt = self.helpers.bytesToString(target_txt)
 
             elif selected_item == tab.PARAM_HANDL_COMBO_EXTRACT_SINGLE:
