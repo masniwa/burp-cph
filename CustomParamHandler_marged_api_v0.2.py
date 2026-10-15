@@ -1082,38 +1082,44 @@ class EMVTab(JSplitPane, ListSelectionListener):
         self.table_model.fireTableDataChanged()
         self.table.setRowSelectionInterval(0, 0)
 
+    # >> 20261008 mniwa Render the public editor component and release the selection guard even when rendering fails.
     def valueChanged(self, e):
         # Jenky lock mechanism to prevent crash with many quickly-repeated triggers.
         if self.updating:
             return
         self.updating = True
 
-        index = self.table.getSelectedRow()
-        if self.selected_index == index:
+        try:
+            index = self.table.getSelectedRow()
+            if index < 0 or index >= len(self.table_model.messages):
+                self.selected_index = -1
+                return
+            if self.selected_index == index:
+                return
+            original_msg = self.table_model.messages[index].original_msg
+            modified_msg = self.table_model.messages[index].modified_msg
+
+            diff = unified_diff(original_msg.splitlines(1), modified_msg.splitlines(1))
+            text = ''
+            for line in diff:
+                if '---' in line or '+++' in line:
+                    continue
+                text += line
+                if not text.endswith('\n'):
+                    text += '\n'
+
+            dl = self.diffpane.getDividerLocation()
+            is_request = self.table_model.rows[index][1] == 'Request'
+            self.diff_field    .setMessage(text        , is_request)
+            self.original_field.setMessage(original_msg, is_request)
+            self.modified_field.setMessage(modified_msg, is_request)
+
+            self.diffpane.setTopComponent(self.diff_field.getComponent())
+            self.diffpane.setDividerLocation(dl)
+            self.selected_index = index
+        finally:
             self.updating = False
-            return
-        self.selected_index = index
-        original_msg = self.table_model.messages[index].original_msg
-        modified_msg = self.table_model.messages[index].modified_msg
-
-        diff = unified_diff(original_msg.splitlines(1), modified_msg.splitlines(1))
-        text = ''
-        for line in diff:
-            if '---' in line or '+++' in line:
-                continue
-            text += line
-            if not text.endswith('\n'):
-                text += '\n'
-
-        dl = self.diffpane.getDividerLocation()
-        is_request = self.table_model.rows[index][1] == 'Request'
-        self.diff_field    .setMessage(text        , is_request)
-        self.original_field.setMessage(original_msg, is_request)
-        self.modified_field.setMessage(modified_msg, is_request)
-
-        self.diffpane.setTopComponent(self.diff_field.getComponent().getComponentAt(0))
-        self.diffpane.setDividerLocation(dl)
-        self.updating = False
+    # << mniwa
 
 
     class EMVTableModel(AbstractTableModel):
