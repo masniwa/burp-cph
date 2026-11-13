@@ -1,57 +1,47 @@
-## Custom Parameter Handler extension for Burp Suite: a power tool for modifying HTTP messages with surgical precision, even when using macros.
+# Custom Parameter Handler -re v0.3
 
-#### The quicksave and quickload functionality persists through reloading not only the extension, but Burp Suite entirely. All values of each existing configuration tab will be saved, along with the order of all tabs.
+Burp Suite用のCustom Parameter Handlerです。レスポンスから値を抽出し、リクエスト・レスポンスの指定した位置へ置換します。管理APIの認証、CPH設定の順序とキャッシュ参照の保持、動的値の文字列としての置換に対応しています。
 
-#### Use the Export/Import Config buttons to save/load your current configuration to/from a JSON file.
+拡張表示名は **Custom Parameter Handler -re v0.3**、タブ名は **CPH Config -re** です。配置互換性のため、ロードするファイル名は `CustomParamHandler_marged_api_v0.2.py` のままです。
 
-### Manual installation
+## 配置
 
-1. Download the [latest release](https://github.com/elespike/burp-cph/releases) file; e.g., `CustomParameterHandler_3.0.py`
-2. Under _Extender_ > _Options_ > _Python Environment_, point Burp to the location of your copy of Jython's standalone .jar file.
-  a. If you don't already have Jython's standalone .jar file, [download it here](http://www.jython.org/downloads.html).
-3. Finally, add `CustomParamHandler_3.0.py` in _Extender_ > _Extensions_.
+管理方式では、対応する[MCP Server](https://github.com/masniwa/mcp-server)と本リポジトリを同じ親フォルダーへ配置します。
 
-### Installation from the BApp store
+```text
+installation/
+├─ mcp-server/
+│  ├─ build/libs/burp-mcp-all.jar
+│  └─ runtime/                    # 初回ロード時にローカル生成
+└─ burp-cph/
+   ├─ CustomParamHandler_marged_api_v0.2.py
+   ├─ CPH_API_v0_2.py
+   ├─ CPH_Managed.py
+   └─ runtime/cph-connection.json
+```
 
-1. Under _Extender_ > _Options_ > _Python Environment_, point Burp to the location of your copy of Jython's standalone .jar file.
-  a. If you don't already have Jython's standalone .jar file, [download it here](http://www.jython.org/downloads.html).
-2. Find and select _Custom Parameter Handler_ within the _Extender_ > _BApp Store_ tab, then click the _Install_ button.
+`runtime/cph-connection.json`は `../../mcp-server/runtime` を参照します。フォルダー名や配置を変える場合は、この相対パスを実際のMCP runtimeへ合わせてください。資格情報そのものをこのファイルに記述しないでください。
 
-### Adding configuration tabs
+## ロード
 
-- Click '+' to add an empty tab; or
-- Select one or many requests from anywhere in Burp, right-click, and choose _Send to CPH_.  
-This will create as many tabs as the number of selected requests, and populate each tab with each selected request to be issued for parameter extraction.
+1. BurpでJython standalone JARの場所を設定します。
+2. MCP側の手順に従い、`mcp-server/build/libs/burp-mcp-all.jar` を先にロードします。MCPがローカルに生成する `runtime/settings.json` と `runtime/operator-secrets.json` を使用します。
+3. ExtensionsからPython拡張として `CustomParamHandler_marged_api_v0.2.py` を追加します。3つのPythonファイルは同じフォルダーに置いてください。
+4. 表示名v0.3、CPH Config -reタブ、`127.0.0.1:17866` のAPI起動ログを確認します。MCPの `get_cph_config` で `success=true` と `managed=true` を確認してください。
+5. 通常の管理運用はMCPの **REVIEW** モードを使用します。設定適用・検証送信・Scan・回復は公開MCPの `diagnostic_job` を使用します。
 
-### Enabling/Disabling configuration tabs
+CPHは同じAPIポートを使うため1つだけロードします。管理設定が生成される前にCPHだけをロードした状態を、管理運用の準備完了とは扱わないでください。MCP runtimeの秘密情報、Project、通信履歴はGitへ追加しません。
 
-Simply click the checkbox next to the tab's name.
-New tabs are enabled by default but require a valid configuration in order to have any effect.
+## 使用時の確認
 
-### Reordering configuration tabs
+抽出正規表現の名前付きグループはPython形式 `(?P<name>...)` を使用します。CPHの適用にはBurp Target scope、Tool scope、トリガー、置換先、抽出元の設定がそれぞれ必要です。設定のImport成功だけで実際の置換成功とは判断せず、対象別のMacro・Rule・CPH構成を通常の診断手順で検証してください。
 
-- Click the '<' and '>' buttons to swap the currently selected tab with its preceding or succeeding neighbor.
+共有キャッシュを利用するフローは逐次送信を前提とします。同じCPH・Cookie・アカウントを使う別テストを並行して実行しないでください。
 
-Leftmost tabs will be processed first; therefore, tab order may be important, especially when extracting values from cached responses.
+## 更新
 
-Visit the Wiki to learn more about [utilizing cached responses](https://github.com/elespike/burp-cph/wiki/08.-Utilizing-cached-responses).
+実行中のScan・補助通信と未完了の設定回復がないことを確認し、現在のProject・履歴・設定を保存してから更新します。CPHソースの更新時やUnload後は、Burpプロセスを終了してから再起動し、保存済みProjectを開き直してロードしてください。設定Importだけの場合は再起動不要です。
 
-### Tab configuration at a glance
+## ライセンス
 
-#### _Scoping_
-Depending on the selected option, this tab will take action on either:
-- Requests only, Responses only, or both Requests and Responses; then either
-  - All requests coming through Burp which are also in Burp's scope; or
-  - Requests coming through Burp, in Burp's scope, and also matching the given expression.
-
-#### _Parameter handling_
-The supplied expression will be used to find the value that will be replaced with the replacement value.
-
-RegEx features may be used to fine-tune modifications. Visit the Wiki to learn more.
-
-When targeting a subset of matches, enter comma-separated, zero-based indices or slices (following Python's slice syntax).
-  E.g.: `1,3,6:9` would act on the 2nd, 4th, 7th, 8th and 9th matches.
-
-If not using a static value, the supplied expression will be used to find the desired replacement value.
-
-### Please [visit the Wiki](https://github.com/elespike/burp-cph/wiki) for explanations on the remaining options.
+MIT License。元のCustom Parameter Handlerの著作権表示と条件は [LICENSE](LICENSE) を参照してください。

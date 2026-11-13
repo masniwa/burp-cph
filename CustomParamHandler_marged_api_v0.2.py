@@ -1,5 +1,8 @@
 from CPH_API_v0_2 import start_cph_api
+from CPH_Managed import install_log_filter, managed
 from collections import namedtuple
+
+CPH_VERSION = '0.3'
 
 from SimpleHTTPServer import SimpleHTTPRequestHandler
 from json             import loads
@@ -410,7 +413,7 @@ class MainTab(ITab, ChangeListener):
 
     @staticmethod
     def getTabCaption():
-        return 'CPH Config'
+        return 'CPH Config -re'
 
     def getUiComponent(self):
         return MainTab.mainpane
@@ -808,6 +811,15 @@ class OptionsTab(SubTab, ChangeListener):
         warn = False
         for cm in tab.config_mechanisms:
             if cm.name in config:
+                # Full managed restores also include unchanged source samples.
+                # Re-rendering every native message editor can monopolize the
+                # Swing thread and outlast the caller's configuration timeout.
+                # Keep every other setter (notably cached references) active.
+                if (managed and cm.name in ('single_request', 'single_response')
+                        and isinstance(config[cm.name], basestring)):
+                    current = cm.getter()
+                    if current is not None and unicode(current) == config[cm.name]:
+                        continue
                 cm.setter(config[cm.name])
             else:
                 warn = True
@@ -951,8 +963,7 @@ class OptionsTab(SubTab, ChangeListener):
             self.httpd.shutdown()
             self.httpd.server_close()
             self.httpd = None
-            self.api_httpd = None
-            self.api_httpd_thread = None
+            self.httpd_thread = None
             self.chkbox_demo.setText(self.DEMO_INACTIVE)
 
 
@@ -990,6 +1001,17 @@ class OptionsTab(SubTab, ChangeListener):
             return
 
         # Restore tab order
+        if managed:
+            # Move in destination order: moving later tabs in the original
+            # iteration order can displace a prefix that was already restored.
+            current_tabs = list(MainTab.get_config_tabs())
+            tabs_by_name = dict((tab.namepane_txtfield.getText(), tab) for tab in current_tabs)
+            desired_tabs = [tabs_by_name[name] for name in loaded_tab_names]
+            desired_tabs += [tab for tab in current_tabs if tab.namepane_txtfield.getText() not in loaded_tab_names]
+            for index, tab in enumerate(desired_tabs, 1):
+                if MainTab.mainpane.indexOfComponent(tab) != index:
+                    ConfigTab.move_tab(tab, index)
+            return
         for tab in MainTab.get_config_tabs():
             tab_name = tab.namepane_txtfield.getText()
             # Adding one because the Options tab is always the first tab.
@@ -1550,8 +1572,8 @@ class ConfigTab(SubTab):
             ),
             SubTab.CONFIG_MECHANISM(
                 'single_response',
-                lambda   : MainTab._cph.helpers.bytesToString(self.param_handl_response_editor.getMessage()),
-                lambda cv: self.param_handl_response_editor.setMessage(MainTab._cph.helpers.stringToBytes(cv), False)
+                self.get_single_response,
+                self.set_single_response
             ),
             SubTab.CONFIG_MECHANISM(
                 'macro_expression',
@@ -1569,6 +1591,19 @@ class ConfigTab(SubTab):
                 lambda cv: self.param_handl_combo_cached.setSelectedItem(cv)
             ),
         ]
+
+    def get_single_response(self):
+        # The response editor is read-only and its Swing view can lag/reset
+        # while tabs are created/moved. Imported definition and live SINGLE
+        # responses belong to the model, not that view. Keep legacy behavior.
+        message = self.response if managed else self.param_handl_response_editor.getMessage()
+        return MainTab._cph.helpers.bytesToString(message)
+
+    def set_single_response(self, value):
+        message = MainTab._cph.helpers.stringToBytes(value)
+        if managed:
+            self.response = message
+        self.param_handl_response_editor.setMessage(message, False)
 
     def initialize_req_resp(self):
         return [], MainTab._cph.helpers.stringToBytes(''.join([' \r\n' for i in range(6)]))
@@ -2007,9 +2042,10 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
         self.logger.setLevel(INFO)
 
     def registerExtenderCallbacks(self, callbacks):
+        install_log_filter(self.logger)
         self.callbacks = callbacks
         self.helpers   = callbacks.getHelpers()
-        callbacks.setExtensionName('Custom Parameter Handler')
+        callbacks.setExtensionName('Custom Parameter Handler -re v' + CPH_VERSION)
         callbacks.registerContextMenuFactory(self)
         callbacks.registerExtensionStateListener(self)
         callbacks.registerHttpListener(self)
@@ -2024,7 +2060,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
                 port=17866
             )
             try:
-                callbacks.printOutput('[Custom Parameter Handler v0.2] Local API server started on http://127.0.0.1:17866')
+                callbacks.printOutput('[Custom Parameter Handler -re v%s] Local API server started on http://127.0.0.1:17866' % CPH_VERSION)
             except:
                 pass
             try:
@@ -2033,7 +2069,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
                 pass
         except Exception as e:
             try:
-                callbacks.printOutput('[Custom Parameter Handler v0.2] Failed to start local API server: %s' % e)
+                callbacks.printOutput('[Custom Parameter Handler -re v%s] Failed to start local API server: %s' % (CPH_VERSION, e))
             except:
                 pass
             try:
@@ -2121,6 +2157,11 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
                 tab.param_handl_response_editor.setMessage(response_bytes, False)
                 tab.response = response_bytes
                 self.logger.debug('Got response!')
+            elif managed:
+                # A failed current SINGLE request must not expose a prior
+                # success through the model or read-only response view.
+                tab.response = self.helpers.stringToBytes('')
+                tab.param_handl_response_editor.setMessage(tab.response, False)
         # Generic except because misc. Java exceptions might occur.
         except:
             self.logger.exception('Error issuing configured request from tab "{}" to host "{}:{}"'.format(
@@ -2346,7 +2387,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
             )
             return msg_as_string
 
-        exc_invalid_regex = 'Skipping tab "{}" due to error in expression {{}}: {{}}'.format(
+        exc_invalid_regex = u'Skipping tab "{}" due to error in expression {{}}: {{}}'.format(
             tab.namepane_txtfield.getText()
         )
 
@@ -2356,21 +2397,9 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
             self.logger.error(exc_invalid_regex.format(ph_target_exp, e))
             return msg_as_string
 
-        # The following code does not remove support for groups,
-        # as the original expression will be used for actual replacements.
-        # We simply need an expression without capturing groups to feed into re.findall(),
-        # which enables the logic for granular control over which match indices to target.
-
-        # Removing named groups to normalize capturing groups.
-        findall_exp = re_sub('\?P<.+?>', '', ph_target_exp)
-        # Removing capturing groups to search for full matches only.
-        findall_exp = re_sub(r'(?<!\\)\(([^?]*?)(?<!\\)\)', '\g<1>', findall_exp)
-        findall_exp = re_compile(findall_exp)
-        self.logger.debug('findall_exp: {}'.format(findall_exp.pattern))
-
-        all_matches = re_findall(findall_exp, msg_as_string)
-        self.logger.debug('all_matches: {}'.format(all_matches))
-
+        # Keep native matches and spans. Rewriting group syntax changes the
+        # language of the target pattern and loses lookaround/anchor context.
+        all_matches = list(match_exp.finditer(msg_as_string))
         match_count = len(all_matches)
         if not match_count:
             self.logger.warning(
@@ -2381,8 +2410,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
             )
             return msg_as_string
 
-        matches     = list()
-        dyn_values  = ''
+        dynamic_groups = {}
         replace_exp = ph_extract_static_exp
 
         if tab.param_handl_dynamic_chkbox.isSelected():
@@ -2440,34 +2468,45 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
                 ))
                 return msg_as_string
 
-            groups = {}
-            groups_keys = groups.viewkeys()
-            for match in matches:
-                gd = match.groupdict()
-                # The given expression should have unique group matches.
-                for k in gd.keys():
-                    if k in groups_keys:
-                        self.logger.warning('Skipping tab "{}" because this expression found ambiguous matches: {}'.format(
-                            tab.namepane_txtfield.getText(),
-                            find_exp
-                        ))
-                        return msg_as_string
-                groups.update(gd)
+            source_match = matches[0]
+            # Captured response bytes are data, never executable regex syntax.
+            # Keep target capture numbers and append named source captures in
+            # declaration order for numeric references to dynamic groups.
+            source_names = sorted(source_match.re.groupindex,
+                                  key=source_match.re.groupindex.get)
+            for index, name in enumerate(source_names, match_exp.groups + 1):
+                if name in match_exp.groupindex:
+                    self.logger.warning('Skipping tab "{}" because this expression found ambiguous matches: {}'.format(
+                        tab.namepane_txtfield.getText(), find_exp))
+                    return msg_as_string
+                value = source_match.group(name)
+                if value is None:
+                    value = ''
+                dynamic_groups[name] = value
+                dynamic_groups[str(index)] = value
 
-            # Remove '$' not preceded by '\'
-            exp = re_sub(r'(?<!\\)\$', '', ph_target_exp)
-            flags = re_match('\(\?[Limuxs]{1,6}\)', ph_target_exp)
-            if flags is not None and 'x' in flags.group(0):
-                exp += '\n'
+        def resolve_dynamic_reference(reference):
+            slashes, token = reference.group(1), reference.group(2)
+            if len(slashes) % 2 == 0:
+                return reference.group(0)
+            if token.startswith('g<'):
+                key = token[2:-1]
+                if key and all('0' <= digit <= '9' for digit in key):
+                    key = key.lstrip('0') or '0'
+            elif len(token) == 3:
+                # Three octal digits are a literal replacement escape.
+                return reference.group(0)
+            else:
+                key = token
+            if key not in dynamic_groups:
+                return reference.group(0)
+            # Native match.expand still handles target captures and escapes.
+            # Escape only backslashes in data so inserted \g<...> stays literal.
+            return slashes[:-1] + dynamic_groups[key].replace('\\', '\\\\')
 
-            groups_exp = ''.join(['(?P<{}>{})'.format(group_name, group_match) for group_name, group_match in groups.items()])
-            dyn_values = ''.join(groups.values())
-
-            # No need for another try/except around this re.compile(),
-            # as ph_target_exp was already checked when compiling match_exp earlier.
-            # match_exp = re_compile(exp + groups_exp + end)
-            match_exp = re_compile(exp + groups_exp)
-            self.logger.debug('match_exp adjusted to:\n{}'.format(match_exp.pattern))
+        if dynamic_groups:
+            replace_exp = re_sub(r'(\\+)(g<[^>]*>|[0-7]{3}|[1-9][0-9]?)',
+                                 resolve_dynamic_reference, replace_exp)
 
         subsets = ph_matchnum_txt.replace(' ', '').split(',')
         match_indices = []
@@ -2497,44 +2536,22 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
                 )
                 continue
 
-        match_indices = set(sorted([m for m in match_indices if m < match_count]))
+        match_indices = set([m for m in match_indices if 0 <= m < match_count])
         self.logger.debug('match_indices: {}'.format(match_indices))
-
-        # Using findall_exp to avoid including capture groups in the result.
-        message_parts = re_split(findall_exp, msg_as_string)
-        self.logger.debug('message_parts: {}'.format(message_parts))
-
-        # The above strategy to use re.split() in order to enable the usage of match_indices
-        # ends up breaking non-capturing groups. At this point, however, we can safely remove
-        # all non-capturing groups and everything will be peachy.
-        ncg_exp = re_compile('\(\?[^P].+?\)')
-        if re_search(ncg_exp, match_exp.pattern) is not None:
-            match_exp = re_compile(ncg_exp.sub('', match_exp.pattern))
-            if flags is not None:
-                match_exp = re_compile(flags.group(0) + match_exp.pattern)
-            self.logger.debug('match_exp adjusted to:\n{}'.format(match_exp.pattern))
-
-        modified_message  = ''
-        remaining_indices = list(match_indices)
-        for part_index, message_part in enumerate(message_parts):
-            if remaining_indices and part_index == remaining_indices[0]:
+        message_parts = []
+        previous_end = 0
+        for index, match in enumerate(all_matches):
+            message_parts.append(msg_as_string[previous_end:match.start()])
+            if index in match_indices:
                 try:
-                    final_value = match_exp.sub(replace_exp, all_matches[part_index] + dyn_values)
-                except (re_error, IndexError) as e:
+                    final_value = match.expand(replace_exp)
+                except (re_error, IndexError, TypeError) as e:
                     self.logger.error(exc_invalid_regex.format(match_exp.pattern + ' or expression ' + replace_exp, e))
                     return msg_as_string
-                self.logger.debug('Found:\n{}\nreplaced using:\n{}\nin string:\n{}'.format(
-                    match_exp.pattern,
-                    replace_exp,
-                    all_matches[part_index] + dyn_values
-                ))
-                final_value = message_part + final_value
-                modified_message += final_value
-                remaining_indices.pop(0)
-            elif part_index < match_count:
-                modified_message += message_part + all_matches[part_index]
+                message_parts.append(final_value)
             else:
-                modified_message += message_part
-
-        return modified_message
+                message_parts.append(match.group(0))
+            previous_end = match.end()
+        message_parts.append(msg_as_string[previous_end:])
+        return ''.join(message_parts)
 
