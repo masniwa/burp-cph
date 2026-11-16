@@ -6,6 +6,8 @@ Burp Suite用のCustom Parameter Handlerです。レスポンスから値を抽�
 
 ## 配置
 
+新しいWindows PCでの取得・Claude Code接続・通常／動的の初回能力確認と登録は、MCP側の[INSTALL-WINDOWS.md](https://github.com/masniwa/mcp-server/blob/main/INSTALL-WINDOWS.md)に従います。開発PCのruntimeや資格情報はコピーしません。CPH single抽出を使うローカルfixtureの合格と、実対象のMacro・cached抽出・認証の合格は区別します。CPHコードはv0.3のままで、今回の更新は導入案内だけです。
+
 管理方式では、対応する[MCP Server](https://github.com/masniwa/mcp-server)と本リポジトリを同じ親フォルダーへ配置します。
 
 ```text
