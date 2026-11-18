@@ -1,0 +1,52 @@
+# -*- coding: utf-8 -*-
+"""Jython 2.7 startup-selection regression; no server, GUI or Burp instance."""
+import os
+import sys
+import json
+import codecs
+import shutil
+import tempfile
+import unittest
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ['BURP_DIAG_MANAGED']='1'
+os.environ['BURP_DIAG_CPH_TOKEN']='test-startup-token-'*4
+import CPH_Managed
+
+class RuntimeConnectionTest(unittest.TestCase):
+    def setUp(self):
+        parent=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        directory=os.path.join(parent,'temp')
+        if not os.path.isdir(directory): os.makedirs(directory)
+        self.root=tempfile.mkdtemp(dir=directory)
+        self.cph=os.path.join(self.root,'custom CPH','runtime')
+        self.target=os.path.join(self.root,'mcp-latest','runtime')
+        os.makedirs(self.cph); os.makedirs(self.target)
+        self.write(os.path.join(self.target,'settings.json'),{'schemaVersion':1})
+        self.write(os.path.join(self.target,'operator-secrets.json'),{'worker':'w'*48,'cph':'c'*48})
+        self.pointer=os.path.join(self.cph,'cph-connection.json')
+        self.write(self.pointer,{'runtimeDirectory':'../../mcp-latest/runtime'})
+    def tearDown(self): shutil.rmtree(self.root)
+    def write(self,path,value):
+        with codecs.open(path,'w','utf-8') as handle: handle.write(json.dumps(value))
+    def test_relative_reference_and_nonsecret_metadata(self):
+        enabled,token,metadata=CPH_Managed.configuration({},self.cph)
+        self.assertTrue(enabled); self.assertEqual('c'*48,token)
+        self.assertEqual(os.path.abspath(self.target),metadata['runtimeDirectory'])
+        self.assertNotIn(token,json.dumps(metadata))
+    def test_missing_explicit_reference_never_downgrades(self):
+        self.write(self.pointer,{'runtimeDirectory':'../../missing/runtime'})
+        with self.assertRaises(ValueError): CPH_Managed.load_configuration({},self.cph)
+        self.assertFalse(os.path.exists(os.path.join(self.root,'missing')))
+    def test_invalid_reference_types_are_rejected(self):
+        for value in ['',None,42,[]]:
+            self.write(self.pointer,{'runtimeDirectory':value})
+            with self.assertRaises(ValueError): CPH_Managed.load_configuration({},self.cph)
+    def test_metadata_is_startup_state_not_a_fresh_environment_read(self):
+        before=CPH_Managed.connection_metadata()
+        os.environ['BURP_DIAG_MANAGED']='0'
+        self.assertEqual(before,CPH_Managed.connection_metadata())
+        self.assertTrue(CPH_Managed.managed)
+        self.assertTrue(CPH_Managed.authorized('Bearer '+'test-startup-token-'*4))
+        os.environ['BURP_DIAG_MANAGED']='1'
+
+if __name__=='__main__': unittest.main()

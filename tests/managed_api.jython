@@ -1,0 +1,112 @@
+# Jython 2.7 in-memory API regression; never starts the server or imports the Burp extension.
+import os
+import sys
+import unittest
+from StringIO import StringIO
+from json import dumps
+from json import loads
+from collections import OrderedDict
+from javax.swing import SwingUtilities
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ['BURP_DIAG_MANAGED'] = '1'
+os.environ['BURP_DIAG_CPH_TOKEN'] = 'jython-mock-token-' * 4
+from CPH_Managed import authorized
+from CPH_API_v0_2 import CphApiHandler
+
+class FakeHandler(CphApiHandler):
+    def __init__(self, header=None, body=None):
+        self.path = '/cph/import'
+        raw = dumps(body or {})
+        self.headers = {'Content-Length': str(len(raw))}
+        if header is not None:
+            self.headers['Authorization'] = header
+        self.rfile = StringIO(raw)
+        self.reply = None
+    def _send_json(self, code, body):
+        self.reply = (code, body)
+
+class ManagedTest(unittest.TestCase):
+    def test_missing_token_does_not_call_import(self):
+        FakeHandler.options_tab_getter = staticmethod(lambda: self.fail('Unauthorized native access'))
+        handler = FakeHandler()
+        handler.do_POST()
+        self.assertEqual(403, handler.reply[0])
+    def test_authorized_native_api_preserves_keep_mode(self):
+        calls = []
+        owner = self
+        class Options(object):
+            def load_config(self, config, replace):
+                owner.assertTrue(SwingUtilities.isEventDispatchThread())
+                calls.append((list(config.keys()), replace))
+        class Logger(object):
+            def info(self, *args): pass
+        FakeHandler.options_tab_getter = staticmethod(lambda: Options())
+        FakeHandler.logger_getter = staticmethod(lambda: Logger())
+        handler = FakeHandler('Bearer ' + os.environ['BURP_DIAG_CPH_TOKEN'], {'job:demo:tab': {'enabled': True}})
+        handler.do_POST()
+        self.assertEqual(200, handler.reply[0])
+        self.assertEqual([(['job:demo:tab'], False)], calls)
+    def test_policy_comparison_is_compatible_with_jython_strings(self):
+        self.assertFalse(authorized(None))
+        self.assertFalse(authorized('Bearer wrong'))
+        self.assertTrue(authorized('Bearer ' + os.environ['BURP_DIAG_CPH_TOKEN']))
+    def test_wire_serialization_preserves_source_tab_order(self):
+        config = OrderedDict(('job:demo:tab-' + str(index), {'enabled': True}) for index in range(20))
+        owner = self
+        class Options(object):
+            def prepare_to_save_all(self):
+                owner.assertTrue(SwingUtilities.isEventDispatchThread())
+                return config
+        FakeHandler.options_tab_getter = staticmethod(lambda: Options())
+        handler = FakeHandler('Bearer ' + os.environ['BURP_DIAG_CPH_TOKEN'])
+        handler.path = '/cph/export'
+        handler.do_GET()
+        self.assertEqual(200, handler.reply[0])
+        wire = loads(dumps(handler.reply[1]), object_pairs_hook=OrderedDict)
+        self.assertEqual(list(config.keys()), list(wire['config'].keys()))
+    def test_non_ascii_existing_tab_name_survives_export(self):
+        name = u'\u65e2\u5b58\u30bf\u30d6'
+        class Options(object):
+            def prepare_to_save_all(self): return OrderedDict([(name, {'enabled': True})])
+        FakeHandler.options_tab_getter = staticmethod(lambda: Options())
+        handler = FakeHandler('Bearer ' + os.environ['BURP_DIAG_CPH_TOKEN'])
+        handler.path = '/cph/export';handler.do_GET()
+        self.assertEqual(200, handler.reply[0]);self.assertTrue(name in handler.reply[1]['config'])
+
+    def cached_reference_reapplied(self, enabled, dynamic=True):
+        owner = self
+        calls = []
+        current = OrderedDict()
+        config = OrderedDict([('source', {'enabled': True}), ('dest', {
+            'enabled': enabled, 'dynamic_checkbox': dynamic, 'extract_choice_index': 2, 'cached_selection': 'source'})])
+        class Options(object):
+            def load_config(self, value, replace):
+                owner.assertTrue(SwingUtilities.isEventDispatchThread())
+                calls.append((list(value.keys()), replace))
+                for name, tab in value.items(): current[name] = dict(tab)
+                if len(value) > 1: current['dest']['cached_selection'] = None
+            def prepare_to_save_all(self):
+                owner.assertTrue(SwingUtilities.isEventDispatchThread())
+                return current
+        class Logger(object):
+            def info(self, *args): pass
+        options = Options()
+        FakeHandler.options_tab_getter = staticmethod(lambda: options)
+        FakeHandler.logger_getter = staticmethod(lambda: Logger())
+        handler = FakeHandler('Bearer ' + os.environ['BURP_DIAG_CPH_TOKEN'], config)
+        handler.do_POST()
+        self.assertEqual(200, handler.reply[0])
+        self.assertEqual([(['source', 'dest'], False), (['dest'], False)], calls)
+        self.assertEqual('source', current['dest']['cached_selection'])
+        self.assertEqual(enabled, current['dest']['enabled'])
+
+    def test_cached_reference_lost_by_reordering_is_reapplied_on_edt(self):
+        self.cached_reference_reapplied(True)
+
+    def test_disabled_cached_reference_is_preserved_on_edt(self):
+        self.cached_reference_reapplied(False)
+
+    def test_temporarily_static_tab_keeps_its_configured_reference_on_edt(self):
+        self.cached_reference_reapplied(False, False)
+
+unittest.main()

@@ -6,7 +6,7 @@ Burp Suite用のCustom Parameter Handlerです。レスポンスから値を抽�
 
 ## 配置
 
-新しいWindows PCでの取得・Claude Code接続・通常／動的の初回能力確認と登録は、MCP側の[INSTALL-WINDOWS.md](https://github.com/masniwa/mcp-server/blob/main/INSTALL-WINDOWS.md)に従います。開発PCのruntimeや資格情報はコピーしません。CPH single抽出を使うローカルfixtureの合格と、実対象のMacro・cached抽出・認証の合格は区別します。CPHコードはv0.3のままで、今回の更新は導入案内だけです。
+新しいWindows PCでの取得・Claude Code接続・通常／動的の初回能力確認と登録は、MCP側の[INSTALL-WINDOWS.md](https://github.com/masniwa/mcp-server/blob/main/INSTALL-WINDOWS.md)に従います。開発PCのruntimeや資格情報はコピーしません。CPH single抽出を使うローカルfixtureの合格と、実対象のMacro・cached抽出・認証の合格は区別します。表示版はv0.3を維持し、runtime接続の検証と認証済みAPIの起動時参照情報を追加しています。
 
 管理方式では、対応する[MCP Server](https://github.com/masniwa/mcp-server)と本リポジトリを同じ親フォルダーへ配置します。
 
@@ -22,7 +22,9 @@ installation/
    └─ runtime/cph-connection.json
 ```
 
-`runtime/cph-connection.json`は `../../mcp-server/runtime` を参照します。フォルダー名や配置を変える場合は、この相対パスを実際のMCP runtimeへ合わせてください。資格情報そのものをこのファイルに記述しないでください。
+ロード前に、MCP 1.4.20以降の`configure-runtime.ps1 -McpJar <ロードするJAR> -CphRoot <このフォルダー>`で参照を確認します。既定は読取り専用です。Burp停止保守中に`-Configure -BurpStopped`を加えると、実配置から`runtime/cph-connection.json`の相対参照を生成します。親フォルダー全体の移動は参照を維持し、片方だけの改名・移動やロードJAR変更時は再実行します。複数cloneから自動選択せず、秘密ファイルや旧台帳をコピー・変更しません。詳しい手順はMCP側のINSTALL-WINDOWS.mdを使用してください。
+
+明示接続先が欠落・不完全なら`CPH_RUNTIME_PROFILE_MISSING`で起動を停止し、認証なしの動作へ落としません。MCPを先にロードして、このPCのruntimeを生成してください。認証済みAPIの`connection`は起動時の参照元とruntimeを返し、新MCPは`connectionDiagnostics.runtimeMatches`で照合します。環境変数方式や旧CPHでは照合不能をnullで示します。ファイルの修正だけで稼働中の認証情報は更新されません。診断中に再ロードせず、許可された保守へ分けてください。
 
 ## ロード
 

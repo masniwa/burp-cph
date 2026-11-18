@@ -6,7 +6,7 @@ try:
 except ImportError:
     from http.server import BaseHTTPRequestHandler, HTTPServer
     from socketserver import ThreadingMixIn
-from CPH_Managed import authorized, managed, install_log_filter, safe_error
+from CPH_Managed import authorized, managed, install_log_filter, safe_error, connection_metadata
 try:
     long
 except NameError:
@@ -112,7 +112,9 @@ class CphApiHandler(BaseHTTPRequestHandler):
         if self.path == '/cph/health':
             self._send_json(200, {
                 'success': True,
-                'message': 'ok'
+                'message': 'ok',
+                'managed': managed,
+                'connection': connection_metadata()
             })
             return
 
@@ -124,7 +126,8 @@ class CphApiHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {
                     'success': True,
                     'config': self._normalize_for_json(config),
-                    'managed': managed
+                    'managed': managed,
+                    'connection': connection_metadata()
                 })
             except (Exception, JavaException) as e:
                 try:
