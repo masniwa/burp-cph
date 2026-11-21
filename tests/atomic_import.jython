@@ -1,0 +1,87 @@
+# Headless Jython regression for the actual Swing tab-removal path; no Burp/network.
+import os
+import sys
+import unittest
+from collections import OrderedDict, namedtuple
+from javax.swing import JPanel, JTabbedPane
+from javax.swing.event import ChangeListener
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ['BURP_DIAG_MANAGED'] = '1'
+os.environ['BURP_DIAG_CPH_TOKEN'] = 'jython-mock-token-' * 4
+from CPH_API_v0_2 import atomic_import, on_ui_thread, normalize_native, CphAtomicError
+from CPH_Validation import OPTIONS_NAME
+
+
+class AtomicImportSwingTest(unittest.TestCase):
+    def test_partial_import_restores_exact_baseline_without_add_tab_side_effect(self):
+        owner = self
+        class MainTab(object):
+            mainpane = JTabbedPane()
+            @staticmethod
+            def get_config_tabs():
+                return [component for component in MainTab.mainpane.getComponents()
+                        if isinstance(component, ConfigTab)]
+        class ConfigTab(JPanel):
+            def __init__(self, name):
+                JPanel.__init__(self)
+                self.name = name
+                self.value = {}
+                self.emv_tab = JPanel()
+                index = MainTab.mainpane.getTabCount() - 1
+                MainTab.mainpane.add(self, index)
+                options.emv_tab_pane.add(name, self.emv_tab)
+                MainTab.mainpane.setSelectedIndex(index)
+        class AddListener(ChangeListener):
+            def stateChanged(self, event):
+                if MainTab.mainpane.getSelectedComponent() is plus:
+                    ConfigTab('Unconfigured')
+        class Options(object):
+            def __init__(self):
+                self.emv_tab_pane = JTabbedPane()
+                self.flags = {'chkbox_scanner': False}
+                self.fail_once = True
+            def prepare_to_save_all(self):
+                expression = namedtuple('ExpressionConfig', 'is_regex expression')
+                result = OrderedDict((tab.name, dict(tab.value)) for tab in MainTab.get_config_tabs())
+                for value in result.values():
+                    if 'static_expression' in value:
+                        value['static_expression'] = expression(*value['static_expression'])
+                result[OPTIONS_NAME] = dict(self.flags)
+                return result
+            def load_config(self, config, replace):
+                owner.assertFalse(replace)
+                self.flags = dict(config.get(OPTIONS_NAME, self.flags))
+                for name, value in config.items():
+                    if name == OPTIONS_NAME:
+                        continue
+                    tab = next((tab for tab in MainTab.get_config_tabs() if tab.name == name), None)
+                    if tab is None:
+                        tab = ConfigTab(name)
+                    tab.value = dict(value)
+                    if name == 'job:test:tab7' and self.fail_once:
+                        self.fail_once = False
+                        raise CphAtomicError('CPH_SETTER_FAILED', 'setter')
+        options = Options()
+        plus = JPanel()
+        MainTab.mainpane.add('Options', JPanel())
+        MainTab.mainpane.add('+', plus)
+        MainTab.mainpane.addChangeListener(AddListener())
+        before = OrderedDict([(OPTIONS_NAME, {'chkbox_scanner': False})])
+        desired = OrderedDict([('job:test:tab' + str(i), {'enabled': True})
+                               for i in range(8)])
+        desired['job:test:tab0']['static_expression'] = [True, 'literal']
+        desired[OPTIONS_NAME] = {'chkbox_scanner': True}
+        def run():
+            with owner.assertRaises(CphAtomicError) as context:
+                atomic_import(options, MainTab, 'test:atomic:1', before, desired)
+            owner.assertEqual('CPH_SETTER_FAILED', context.exception.code)
+            owner.assertEqual(before, options.prepare_to_save_all())
+            owner.assertEqual([], MainTab.get_config_tabs())
+            owner.assertEqual(0, options.emv_tab_pane.getTabCount())
+            atomic_import(options, MainTab, 'test:atomic:2', before, desired)
+            owner.assertEqual(desired, normalize_native(options.prepare_to_save_all()))
+        on_ui_thread(run)
+
+
+unittest.main()

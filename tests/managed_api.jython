@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ['BURP_DIAG_MANAGED'] = '1'
 os.environ['BURP_DIAG_CPH_TOKEN'] = 'jython-mock-token-' * 4
 from CPH_Managed import authorized
-from CPH_API_v0_2 import CphApiHandler
+from CPH_API_v0_2 import CphApiHandler, CphAtomicError, on_ui_thread, load_config_keep, atomic_import
 
 class FakeHandler(CphApiHandler):
     def __init__(self, header=None, body=None):
@@ -26,6 +26,40 @@ class FakeHandler(CphApiHandler):
         self.reply = (code, body)
 
 class ManagedTest(unittest.TestCase):
+    def test_unchanged_inactive_missing_source_survives_unrelated_import(self):
+        for reference in (None, '', 'deleted-source'):
+            current=OrderedDict([('human-disabled', {'enabled':False,'dynamic_checkbox':True,
+                'extract_choice_index':2,'cached_selection':reference})])
+            desired=OrderedDict(current);desired['job:new:static']={'enabled':True}
+            calls=[]
+            class Options(object):
+                def prepare_to_save_all(self):return current
+                def load_config(self,config,replace):
+                    calls.append(list(config.keys()))
+                    for name,tab in config.items():current[name]=dict(tab)
+            load_config_keep(Options(),desired)
+            self.assertEqual(desired,current);self.assertEqual([list(desired.keys())],calls)
+
+    def test_active_transitive_missing_source_is_rejected_before_mutation(self):
+        current=OrderedDict([('human-disabled', {'enabled':False,'dynamic_checkbox':True,
+            'extract_choice_index':2,'cached_selection':'deleted-source'})])
+        desired=OrderedDict(current);desired['dest']={'enabled':True,'dynamic_checkbox':True,
+            'extract_choice_index':2,'cached_selection':'human-disabled'}
+        class Options(object):
+            def prepare_to_save_all(self):return current
+            def load_config(self,config,replace):raise AssertionError('must not mutate')
+        with self.assertRaises(ValueError):load_config_keep(Options(),desired)
+        atomic_import(Options(),None,'fixture:no-op',current,current)
+
+    def test_ui_thread_preserves_atomic_error_code_and_stage(self):
+        def fail():
+            self.assertTrue(SwingUtilities.isEventDispatchThread())
+            raise CphAtomicError('CPH_IMPORT_READBACK_MISMATCH', 'readback')
+        with self.assertRaises(CphAtomicError) as context:
+            on_ui_thread(fail)
+        self.assertEqual('CPH_IMPORT_READBACK_MISMATCH', context.exception.code)
+        self.assertEqual('readback', context.exception.stage)
+
     def test_missing_token_does_not_call_import(self):
         FakeHandler.options_tab_getter = staticmethod(lambda: self.fail('Unauthorized native access'))
         handler = FakeHandler()
@@ -46,6 +80,20 @@ class ManagedTest(unittest.TestCase):
         handler.do_POST()
         self.assertEqual(200, handler.reply[0])
         self.assertEqual([(['job:demo:tab'], False)], calls)
+    def test_malformed_later_expression_does_not_create_any_tab(self):
+        calls = []
+        class Options(object):
+            def load_config(self, config, replace): calls.append(list(config.keys()))
+        class Logger(object):
+            def info(self, *args): pass
+        FakeHandler.options_tab_getter = staticmethod(lambda: Options())
+        FakeHandler.logger_getter = staticmethod(lambda: Logger())
+        config = OrderedDict([('job:demo:first', {'static_expression': [True, 'ok']}),
+                              ('job:demo:last', {'static_expression': 'bad'})])
+        handler = FakeHandler('Bearer ' + os.environ['BURP_DIAG_CPH_TOKEN'], config)
+        handler.do_POST()
+        self.assertEqual(500, handler.reply[0])
+        self.assertEqual([], calls)
     def test_policy_comparison_is_compatible_with_jython_strings(self):
         self.assertFalse(authorized(None))
         self.assertFalse(authorized('Bearer wrong'))

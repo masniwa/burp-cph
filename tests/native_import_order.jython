@@ -1,0 +1,95 @@
+# Headless real Swing, actual native importer/move/getter; no Burp/network.
+import os,sys,textwrap,unittest,itertools,logging
+from collections import OrderedDict
+from javax.swing import JPanel,JTabbedPane,JTextField,JComboBox,SwingUtilities
+from java.lang import Runnable
+
+root=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+source_path=os.environ.get('CPH_TEST_SOURCE',os.path.join(root,'CustomParamHandler_marged_api_v0.2.py'))
+source=open(source_path,'rb').read().replace('\r\n','\n')
+def method(name, end, text=source):
+    start=text.index('    def '+name+'(')
+    finish=text.index(end,start)
+    return textwrap.dedent(text[start:finish]).replace('    @staticmethod\n','')
+
+class ImportOrderTest(unittest.TestCase):
+    def trial(self, initial, requested, enabled=True, prelude=()):
+        owner=self
+        class Main(object):
+            mainpane=JTabbedPane()
+            logger=logging.getLogger('native-order-test')
+            @staticmethod
+            def get_options_tab():return options
+        class Tab(JPanel):
+            PARAM_HANDL_COMBO_EXTRACT_CACHED='cached'
+            def __init__(self,name=''):
+                JPanel.__init__(self)
+                previous=list(Main.get_config_tabs())
+                self.namepane_txtfield=JTextField(name)
+                self.tabtitle_pane=JPanel()
+                self.emv_tab=JPanel()
+                self.param_handl_combo_cached=JComboBox([x.namepane_txtfield.getText() for x in previous])
+                self.param_handl_combo_extract=JComboBox(['static','cached'])
+                Main.mainpane.add(self,Main.mainpane.getTabCount()-1)
+                options.emv_tab_pane.add(name,self.emv_tab)
+        class Options(object):
+            CONFIGNAME_OPTIONS='options'
+            def prepare_to_save_tab(self,tab):return {}
+            emv_tab_pane=JTabbedPane()
+            def set_tab_values(self,value,tab,name=None):
+                if name is not None:tab.namepane_txtfield.setText(name)
+        scope=dict(MainTab=Main,ConfigTab=Tab,OptionsTab=Options,product=itertools.product,managed=enabled,
+                   same_native_config=lambda a,b:a==b)
+        eval(compile(method('get_config_tabs','    @staticmethod'),'native-getter','exec'),scope)
+        Main.get_config_tabs=staticmethod(scope['get_config_tabs'])
+        eval(compile(method('restore_combo_cached_selection','    @staticmethod'),'native-cache-selection','exec'),scope)
+        Tab.restore_combo_cached_selection=staticmethod(scope['restore_combo_cached_selection'])
+        eval(compile(method('move_tab','    @staticmethod'),'native-tab-move','exec'),scope)
+        Tab.move_tab=staticmethod(scope['move_tab'])
+        eval(compile(method('load_config','    def prepare_to_save_all('),'native-load-config','exec'),scope)
+        options=Options()
+        Main.mainpane.add('Options',JPanel());Main.mainpane.add('+',JPanel())
+        for name in initial:Tab(name)
+        for names in prelude:
+            scope['managed']=False
+            scope['load_config'](options,OrderedDict((n,{}) for n in names),False)
+        scope['managed']=enabled
+        scope['load_config'](options,OrderedDict((n,{}) for n in requested),False)
+        actual=[x.namepane_txtfield.getText() for x in Main.get_config_tabs()]
+        owner.assertEqual(actual,[Main.mainpane.getComponentAt(i).namepane_txtfield.getText() for i in range(1,Main.mainpane.getTabCount()-1)])
+        owner.assertEqual(len(actual),options.emv_tab_pane.getTabCount())
+        return actual
+
+    def on_edt(self,fn):
+        errors=[]
+        class Work(Runnable):
+            def run(self):
+                try:fn()
+                except BaseException as e:errors.append(e)
+        SwingUtilities.invokeAndWait(Work())
+        if errors:raise errors[0]
+
+    def test_two_existing_groups_plus_new_tabs_match_plan_with_real_native_moves(self):
+        def check():
+            old=['a'+str(i) for i in range(3)]+['b'+str(i) for i in range(5)]
+            desired=['new'+str(i) for i in range(5)]+old
+            self.assertEqual(desired,self.trial(old,desired))
+        self.on_edt(check)
+
+    def test_all_existing_orders_and_unlisted_tabs_with_real_native_moves(self):
+        def check():
+            desired=['source','dest','old1','old2']
+            for old in itertools.permutations(desired):self.assertEqual(desired,self.trial(old,desired))
+            self.assertEqual(['new','b','a','c'],self.trial(['a','b','c'],['new','b']))
+        self.on_edt(check)
+
+    def test_previous_iteration_algorithm_reproduces_runtime_wrong_order(self):
+        def check():
+            old=['a'+str(i) for i in range(3)]+['b'+str(i) for i in range(5)]
+            desired=['new'+str(i) for i in range(5)]+old
+            history=[old[3:]+old[:3],old]
+            self.assertEqual(desired[:5]+['b0']+old[:3]+old[4:],self.trial(old[:3],desired,False,history))
+            self.assertEqual(desired,self.trial(old[:3],desired,True,history))
+        self.on_edt(check)
+
+unittest.main()

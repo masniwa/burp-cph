@@ -1,51 +1,11 @@
 # Custom Parameter Handler -re v0.3
 
-Burp Suite用のCustom Parameter Handlerです。レスポンスから値を抽出し、リクエスト・レスポンスの指定した位置へ置換します。管理APIの認証、CPH設定の順序とキャッシュ参照の保持、動的値の文字列としての置換に対応しています。
+元の`../burp-cph`を保持した改修コピーです。値の抽出・置換とnative通信処理を再利用し、管理API認証、設定Import時の参照・順序保持、ローカル認証プロファイルの読み込みを追加しています。
 
-拡張表示名は **Custom Parameter Handler -re v0.3**、タブ名は **CPH Config -re** です。配置互換性のため、ロードするファイル名は `CustomParamHandler_marged_api_v0.2.py` のままです。
+ExtensionsでPythonとして`CustomParamHandler_marged_api_v0.2.py`を選びます。表示名は`Custom Parameter Handler -re v0.3`、タブ名は`CPH Config -re`です。v0.3でも既存の配置との互換性のためファイル名・API形式は維持しています。同じAPIポートを使うので、従来CPHとの同時ロードは行いません。
 
-## 配置
+ロード前に、MCP側の`configure-runtime.ps1 -McpJar <実際のJAR> -CphRoot <このフォルダー>`で参照先を確認します。既定は読取り専用で、`-Configure -BurpStopped`を加えると停止保守中に`runtime/cph-connection.json`の参照を実配置から生成します。フォルダー名を固定せず、親フォルダー全体の移動は相対参照で維持します。片方だけの改名・移動時は再実行してください。明示した接続先が存在しなければ`CPH_RUNTIME_PROFILE_MISSING`で停止し、管理認証なしでは起動しません。MCPを先にロードしてruntimeを生成してからCPHをロードします。
 
-新しいWindows PCでの取得・Claude Code接続・通常／動的の初回能力確認と登録は、MCP側の[INSTALL-WINDOWS.md](https://github.com/masniwa/mcp-server/blob/main/INSTALL-WINDOWS.md)に従います。開発PCのruntimeや資格情報はコピーしません。CPH single抽出を使うローカルfixtureの合格と、実対象のMacro・cached抽出・認証の合格は区別します。表示版はv0.3を維持し、runtime接続の検証と認証済みAPIの起動時参照情報を追加しています。
+認証済みのAPI取得結果の`connection`は、CPHが起動時に選んだ参照元とruntimeを秘密値なしで返します。新しいMCPの`get_cph_config`は`connectionDiagnostics.runtimeMatches`で比較します。ファイル変更だけでは起動中の認証情報は更新されません。診断中に再ロードせず、許可された保守へ分けてください。詳細な選択ロード、再起動条件、従来MCPとの組合せは[`../mcp-server -re/LOAD.md`](<../mcp-server -re/LOAD.md>)へ集約しています。
 
-管理方式では、対応する[MCP Server](https://github.com/masniwa/mcp-server)と本リポジトリを同じ親フォルダーへ配置します。
-
-```text
-installation/
-├─ mcp-server/
-│  ├─ build/libs/burp-mcp-all.jar
-│  └─ runtime/                    # 初回ロード時にローカル生成
-└─ burp-cph/
-   ├─ CustomParamHandler_marged_api_v0.2.py
-   ├─ CPH_API_v0_2.py
-   ├─ CPH_Managed.py
-   └─ runtime/cph-connection.json
-```
-
-ロード前に、MCP 1.4.20以降の`configure-runtime.ps1 -McpJar <ロードするJAR> -CphRoot <このフォルダー>`で参照を確認します。既定は読取り専用です。Burp停止保守中に`-Configure -BurpStopped`を加えると、実配置から`runtime/cph-connection.json`の相対参照を生成します。親フォルダー全体の移動は参照を維持し、片方だけの改名・移動やロードJAR変更時は再実行します。複数cloneから自動選択せず、秘密ファイルや旧台帳をコピー・変更しません。詳しい手順はMCP側のINSTALL-WINDOWS.mdを使用してください。
-
-明示接続先が欠落・不完全なら`CPH_RUNTIME_PROFILE_MISSING`で起動を停止し、認証なしの動作へ落としません。MCPを先にロードして、このPCのruntimeを生成してください。認証済みAPIの`connection`は起動時の参照元とruntimeを返し、新MCPは`connectionDiagnostics.runtimeMatches`で照合します。環境変数方式や旧CPHでは照合不能をnullで示します。ファイルの修正だけで稼働中の認証情報は更新されません。診断中に再ロードせず、許可された保守へ分けてください。
-
-## ロード
-
-1. BurpでJython standalone JARの場所を設定します。
-2. MCP側の手順に従い、`mcp-server/build/libs/burp-mcp-all.jar` を先にロードします。MCPがローカルに生成する `runtime/settings.json` と `runtime/operator-secrets.json` を使用します。
-3. ExtensionsからPython拡張として `CustomParamHandler_marged_api_v0.2.py` を追加します。3つのPythonファイルは同じフォルダーに置いてください。
-4. 表示名v0.3、CPH Config -reタブ、`127.0.0.1:17866` のAPI起動ログを確認します。MCPの `get_cph_config` で `success=true` と `managed=true` を確認してください。
-5. 通常の管理運用はMCPの **REVIEW** モードを使用します。設定適用・検証送信・Scan・回復は公開MCPの `diagnostic_job` を使用します。
-
-CPHは同じAPIポートを使うため1つだけロードします。管理設定が生成される前にCPHだけをロードした状態を、管理運用の準備完了とは扱わないでください。MCP runtimeの秘密情報、Project、通信履歴はGitへ追加しません。
-
-## 使用時の確認
-
-抽出正規表現の名前付きグループはPython形式 `(?P<name>...)` を使用します。CPHの適用にはBurp Target scope、Tool scope、トリガー、置換先、抽出元の設定がそれぞれ必要です。設定のImport成功だけで実際の置換成功とは判断せず、対象別のMacro・Rule・CPH構成を通常の診断手順で検証してください。
-
-共有キャッシュを利用するフローは逐次送信を前提とします。同じCPH・Cookie・アカウントを使う別テストを並行して実行しないでください。
-
-## 更新
-
-実行中のScan・補助通信と未完了の設定回復がないことを確認し、現在のProject・履歴・設定を保存してから更新します。CPHソースの更新時やUnload後は、Burpプロセスを終了してから再起動し、保存済みProjectを開き直してロードしてください。設定Importだけの場合は再起動不要です。
-
-## ライセンス
-
-MIT License。元のCustom Parameter Handlerの著作権表示と条件は [LICENSE](LICENSE) を参照してください。
+`tests`には通信を発生させないCPython/Jython/実Swingの回帰検証があります。再配置後も元CPHとの互換処理を比較します。

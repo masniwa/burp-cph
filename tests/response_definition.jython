@@ -1,0 +1,51 @@
+# Actual accessors in Jython with Java byte arrays; no extension import or network.
+import os,textwrap,unittest
+from java.lang import String
+from jarray import array
+
+root=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+source=open(os.path.join(root,'CustomParamHandler_marged_api_v0.2.py'),'rb').read().replace('\r\n','\n')
+methods=textwrap.dedent(source[source.index('    def get_single_response('):source.index('    def initialize_req_resp(')])
+
+class DefinitionTest(unittest.TestCase):
+    def fixture(self,managed=True):
+        class Helpers(object):
+            def bytesToString(self,value):return unicode(String(value,'ISO-8859-1'))
+            def stringToBytes(self,value):return array([ord(c) if ord(c)<128 else ord(c)-256 for c in value],'b')
+        class Cph(object):helpers=Helpers()
+        class Main(object):_cph=Cph()
+        class Viewer(object):
+            message=Helpers().stringToBytes(u'old-view')
+            def getMessage(self):return self.message
+            def setMessage(self,value,isRequest):self.received=value
+        class Tab(object):
+            response=Helpers().stringToBytes(u'initial-model')
+            param_handl_response_editor=Viewer()
+        namespace=dict(MainTab=Main,managed=managed)
+        eval(compile(methods,'native-response-accessors','exec'),namespace)
+        Tab.get_single_response=namespace['get_single_response']
+        Tab.set_single_response=namespace['set_single_response']
+        return Tab(),Helpers()
+
+    def test_import_definition_survives_view_reset(self):
+        tab,helpers=self.fixture()
+        value=u'HTTP/1.1 200 OK\r\n\r\nfull-response'
+        tab.set_single_response(value)
+        tab.param_handl_response_editor.message=helpers.stringToBytes(u' \r\n'*6)
+        self.assertEqual(value,tab.get_single_response())
+
+    def test_all_byte_values_and_runtime_update(self):
+        tab,helpers=self.fixture()
+        value=u'HTTP/1.1 200 OK\r\n\r\n'+u''.join(unichr(i) for i in range(256))
+        tab.set_single_response(value)
+        self.assertEqual(value,tab.get_single_response())
+        tab.response=helpers.stringToBytes(u'current-single-result')
+        self.assertEqual(u'current-single-result',tab.get_single_response())
+
+    def test_legacy_view_behavior_is_preserved(self):
+        tab,helpers=self.fixture(False)
+        tab.set_single_response(u'new-definition')
+        self.assertEqual(u'old-view',tab.get_single_response())
+        self.assertEqual(u'initial-model',helpers.bytesToString(tab.response))
+
+unittest.main()

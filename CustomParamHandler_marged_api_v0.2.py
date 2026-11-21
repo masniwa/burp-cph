@@ -1,4 +1,5 @@
-from CPH_API_v0_2 import start_cph_api
+from CPH_Activity import tracked
+from CPH_API_v0_2 import start_cph_api, same_native_config
 from CPH_Managed import install_log_filter, managed
 from collections import namedtuple
 
@@ -980,7 +981,9 @@ class OptionsTab(SubTab, ChangeListener):
         # Modify existing and mark for purge where applicable
         for tab_name, tab in product(loaded_tab_names, MainTab.get_config_tabs()):
             if tab_name == tab.namepane_txtfield.getText():
-                self.set_tab_values(config[tab_name], tab, tab_name)
+                # Preserve untouched native widgets, including inactive incomplete cache selections.
+                if not managed or not same_native_config({tab_name: self.prepare_to_save_tab(tab)}, {tab_name: config[tab_name]}):
+                    self.set_tab_values(config[tab_name], tab, tab_name)
                 if tab_name in tabs_left_to_load:
                     tabs_left_to_load.remove(tab_name)
                 tabs_to_remove[tab] = False
@@ -2056,6 +2059,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
             self.maintab.options_tab.api_httpd, self.maintab.options_tab.api_httpd_thread = start_cph_api(
                 lambda: self.maintab.options_tab,
                 lambda: self.logger,
+                lambda: MainTab,
                 host='127.0.0.1',
                 port=17866
             )
@@ -2134,6 +2138,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
             except:
                 continue
 
+    @tracked("helper_send")
     def issue_request(self, tab):
         tab.request = tab.param_handl_request_editor.getMessage()
 
@@ -2188,6 +2193,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionStateListener, 
         )
         return self.helpers.stringToBytes(msg_as_string)
 
+    @tracked("http_handler")
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
         dbg_skip_tool = 'Skipping message received from {} on account of global tool scope options.'
         if toolFlag == self.callbacks.TOOL_PROXY:
